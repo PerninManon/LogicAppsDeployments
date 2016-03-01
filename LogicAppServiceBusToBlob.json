@@ -1,0 +1,228 @@
+﻿{
+    "$schema": "http://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "logicAppName": {
+            "type": "string",
+            "minLength": 1
+        },
+        "svcPlanName": {
+            "type": "string",
+            "minLength": 1
+        },
+        "skuName": {
+            "type": "string",
+            "defaultValue": "F1",
+            "allowedValues": [
+                "F1",
+                "D1",
+                "B1",
+                "B2",
+                "B3",
+                "S1",
+                "S2",
+                "S3",
+                "P1",
+                "P2",
+                "P3",
+                "P4"
+            ],
+            "metadata": {
+                "description": "Describes plan's pricing tier and instance size. Check details at https://azure.microsoft.com/en-us/pricing/details/app-service/"
+            }
+        },
+        "skuCapacity": {
+            "type": "int",
+            "defaultValue": 1,
+            "minValue": 1,
+            "metadata": {
+                "description": "Describes plan's instance count"
+            }
+        },
+        "workflowSkuName": {
+            "type": "string",
+            "defaultValue": "Free",
+            "allowedValues": [
+                "Free",
+                "Basic",
+                "Standard",
+                "Premium"
+            ]
+        },
+        "blobAccessKey": {
+            "type": "securestring"
+        },
+        "blobAccountName": {
+            "type": "string",
+            "minLength": 1
+        },
+        "serviceBusConnectionString": {
+            "type": "securestring"
+                  }
+    },
+    "variables": {
+        "blobconnection": "blobconnection",
+        "servicebusconnection": "servicebusconnection",
+        "serviceBusTopic": "accountlogicappv2",
+        "serviceBusConnectionString": "all",
+        "blobFolderPath": "/logicappv2"
+
+    },
+    "resources": [
+        {
+            "type": "Microsoft.Web/serverfarms",
+            "apiVersion": "2015-08-01",
+            "name": "[parameters('svcPlanName')]",
+            "location": "[resourceGroup().location]",
+            "tags": {
+                "displayName": "AppServicePlan"
+            },
+            "sku": {
+                "name": "[parameters('skuName')]",
+                "capacity": "[parameters('skuCapacity')]"
+            },
+            "properties": {
+                "name": "[parameters('svcPlanName')]"
+            }
+        },
+        {
+            "type": "Microsoft.Web/connections",
+            "apiVersion": "2015-08-01-preview",
+            "name": "[variables('blobconnection')]",
+            "location": "[resourceGroup().location]",
+            "dependsOn": [
+
+            ],
+            "tags": {
+                "displayName": "blobconnection"
+            },
+            "properties": {
+                "api": {
+                    "id": "[concat('subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Web/locations/', resourceGroup().location, '/managedApis/azureblob')]"
+                },
+                "displayName": "variables('blobconnection')]",
+                "parameterValues": {
+                    "accountName": "[parameters('blobAccountName')]",
+                    "accessKey": "[parameters('blobAccessKey')]"
+                }
+            }
+        },
+        {
+            "type": "Microsoft.Web/connections",
+            "apiVersion": "2015-08-01-preview",
+            "name": "[variables('servicebusconnection')]",
+            "location": "[resourceGroup().location]",
+            "dependsOn": [
+
+            ],
+            "tags": {
+                "displayName": "servicebusconnection"
+            },
+            "properties": {
+                "api": {
+                    "id": "[concat('subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Web/locations/', resourceGroup().location, '/managedApis/servicebus')]"
+                },
+                "displayName": "variables('servicebusconnection')]",
+                "parameterValues": {
+                    "connectionString": "[parameters('serviceBusConnectionString')]"
+                }
+            }
+        },
+        {
+            "type": "Microsoft.Logic/workflows",
+            "apiVersion": "2015-02-01-preview",
+            "name": "[parameters('logicAppName')]",
+            "location": "[resourceGroup().location]",
+            "tags": {
+                "displayName": "LogicApp"
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Web/connections', variables('blobconnection'))]",
+                "[resourceId('Microsoft.Web/connections', variables('servicebusconnection'))]"
+            ],
+            "properties": {
+                "sku": {
+                    "name": "[parameters('workflowSkuName')]",
+                    "plan": {
+                        "id": "[concat(resourceGroup().id, '/providers/Microsoft.Web/serverfarms/', parameters('svcPlanName'))]"
+                    }
+                },
+                "definition": {
+                    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2015-08-01-preview/workflowdefinition.json#",
+                    "contentVersion": "1.0.0.0",
+                    "parameters": {
+                        "$connections": {
+                            "type": "Object"
+
+                        }
+                    },
+
+                    "triggers": {
+                        "When_a_message_is_received_in_topic_subscription": {
+                            "recurrence": {
+                                "frequency": "Minute",
+                                "interval": 1
+                            },
+                            "type": "ApiConnection",
+                            "inputs": {
+                                "host": {
+                                    "api": {
+                                        "runtimeUrl": "[concat('https://logic-apis-', resourceGroup().location, '.azure-apim.net/apim/servicebus')]"
+                                    },
+                                    "connection": {
+                                        "name": "@parameters('$connections')['servicebus']['connectionId']"
+                                    }
+                                },
+                                "method": "get",
+                                "path": "/@{encodeURIComponent(string(variables('serviceBusTopic')))}/subscriptions/@{encodeURIComponent(string(variables('serviceBusConnectionString')))}/messages/head"
+                            },
+                            "conditions": [ ]
+                        }
+                    },
+                    "actions": {
+                        "Create_file": {
+                            "type": "ApiConnection",
+                            "inputs": {
+                                "body": "@decodeDataUri(concat('data:application/octet-stream,',encodeURIComponent(string(triggerBody()['ContentData']))))",
+                                "host": {
+                                    "api": {
+                                        "runtimeUrl":  "[concat('https://logic-apis-', resourceGroup().location, '.azure-apim.net/apim/azureblob')]"
+                                    },
+                                    "connection": {
+                                        "name": "@parameters('$connections')['azureblob']['connectionId']"
+                                    }
+                                },
+                                "method": "post",
+                                "path": "/datasets/default/files",
+                                "queries": {
+                                    "folderPath": "[variables('blobFolderPath')]",
+                                    "name": "@concat(utcnow(),'.xml')"
+                                }
+                            },
+                            "conditions": [ ]
+                        }
+                    },
+                    "outputs": {
+                    }
+                },
+
+                "parameters": {
+                    "$connections": {
+                        "value": {
+                            "azureblob": {
+                                "connectionId": "[resourceId('Microsoft.Web/connections', variables('blobconnection'))]",
+                                "connectionName": "[variables('blobconnection')]",
+                                "id": "[concat(resourceGroup().id, '/providers/Microsoft.Web/locations/northeurope/managedApis/azureblob')]"
+                            },
+                            "servicebus": {
+                                "connectionId": "[resourceId('Microsoft.Web/connections', variables('serviceBusConnection'))]",
+                                "connectionName": "[variables('servicebusconnection')]",
+                                "id": "[concat(resourceGroup().id, '/providers/Microsoft.Web/locations/northeurope/managedApis/servicebus')]"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    ]
+        }
